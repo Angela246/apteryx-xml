@@ -748,47 +748,33 @@ class ApteryxXMLPlugin(plugin.PyangPlugin):
             return patt
         return None
 
-    def format_patterns(self, patterns):
-        subpatterns = []
-        if isinstance(patterns, list):
-            for p in patterns:
-                if isinstance(p, list):
-                    if len(p) > 1 and all(isinstance(x, str) for x in p):
-                        # subpatterns.append("(" + "".join(f"(?={x})" for x in p) + ")")
-                        subpatterns.append("(" + "|".join(f"({x})" for x in p) + ")")
-                    else:
-                        subpatterns.append(self.format_patterns(p))
-                elif isinstance(p, str):
-                    subpatterns.append(f"{p}")
-            # Wrap the union in parentheses if there are multiple subpatterns
-            if len(subpatterns) > 1:
-                return "(" + "|".join(subpatterns) + ")"
-            else:
-                return subpatterns[0]
-        return subpatterns
-    
     def union_pattern (self,ntype):
-        """
-        Recursively retrieves regex patterns for node type within nested unions.
-        """
-        patterns = []
-        if ntype.arg == 'union':
-            uniontypes = ntype.search('type')
-            for uniontype in uniontypes:
-                ut = uniontype
-                if uniontype.i_typedef:
-                    ut = uniontype.i_typedef.search_one("type")
-                if ut is not None:
-                    npatt = ut.search("pattern")
-                    if npatt:
-                        subpats = [f"{p.arg}" for p in npatt]
-                        patterns.append(subpats)
-                    else:
-                        if self.union_pattern(ut):
-                            patterns.append(self.union_pattern(ut))
-        
-        return patterns
+        patterns = [] 
+        if ntype.arg == 'union': 
+            uniontypes = ntype.search('type') 
+            for uniontype in uniontypes: 
+                ut = uniontype 
+                if uniontype.i_typedef: 
+                    ut = uniontype.i_typedef.search_one("type") 
+                if ut is not None: 
+                    npatt = ut.search("pattern") 
 
+                    if npatt:
+                        subpats = [f"({p.arg})" for p in npatt] 
+                        if len(subpats) == 1: 
+                            patterns.append(subpats[0]) 
+                        else:
+                            lookaheads = "".join(f"{pat}" for pat in subpats)
+                            patterns.append(f"({lookaheads})")
+                    else:
+                        utpatt = self.type_to_pattern(ut)
+                        if utpatt is not None:
+                            patterns.append(f"({utpatt})")
+                        else:
+                            nested = self.union_pattern(ut)
+                            if nested:
+                                patterns.append(f"({'|'.join(nested)})")
+        return patterns  
 
     def sample_element(self, node, parent, module, path):
         if path is None:
@@ -871,9 +857,14 @@ class ApteryxXMLPlugin(plugin.PyangPlugin):
             ntype = ntype.i_typedef.search_one("type")
         if ntype is not None:
             if ntype.arg == "string":
-                npatt = ntype.search_one("pattern")
-                if npatt is not None:
-                    res.attrib["pattern"] = npatt.arg
+                npatt = ntype.search("pattern")
+                if npatt:
+                    if len(npatt) == 1:
+                        patterns = npatt[0].arg
+                    else:
+                        patterns = "".join(f"({p.arg})" for p in npatt)
+                    res.attrib["pattern"] = patterns
+
             elif ntype.arg == "boolean":
                 value = etree.SubElement(res, "{" + ns.arg + "}VALUE")
                 value.attrib = OrderedDict()
@@ -939,5 +930,6 @@ class ApteryxXMLPlugin(plugin.PyangPlugin):
             elif ntype.arg == 'union':
                 patterns = self.union_pattern(ntype)
                 if len(patterns) > 0:
-                    res.attrib["pattern"] = f"^{self.format_patterns(patterns)}$"
+                    res.attrib["pattern"] = '|'.join(patterns)
+
         return res, module, path
